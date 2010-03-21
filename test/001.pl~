@@ -1,0 +1,22 @@
+
+use common::sense;
+use EV;
+use AnyEvent;
+use AnyEvent::HTTP;
+
+use Vesp;
+
+http_server undef, 8080, sub {
+    my ($env, $done) = @_;
+    use Data::Dump 'dump';
+    dump $env;
+    #$done->(200, {}, "vesp test");
+};
+
+my $w = AE::timer 3, 0, sub {
+    http_get 'http://127.0.0.1:8080', sub {
+        
+    };
+};
+
+EV::loop;

@@ -1,0 +1,16 @@
+
+use common::sense;
+use EV;
+use AnyEvent;
+use IO::AIO;
+use AnyEvent::AIO;
+
+use Fcntl;
+
+aio_open ("001.pl", O_RDONLY, 0777, sub {
+              my ($fh) = @_;
+              
+          });
+
+
+EV::loop;
