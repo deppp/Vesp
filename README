@@ -1,16 +1,12 @@
 Vesp version 0.01
 =================
 
-The README is used to introduce the module and provide instructions on
-how to install the module, any machine dependencies it may have (for
-example C compilers and installed libraries) and any other information
-that should be provided before the module is installed.
+This is a small AnyEvent based webserver. I was a little frustraited
+with other solutions, so i came up with my own. Note that this is very
+early release, there are a lot of things missing, even essential ones.
 
-A README file is required for CPAN modules since CPAN extracts the
-README file from a module distribution so that people browsing the
-archive can use it get an idea of the modules uses. It is usually a
-good idea to provide version information here so that people can
-decide whether fixes for the module are worth downloading.
+I VERY strongly recomend you to use any other solution possible, until
+Vesp hits at least version 0.10
 
 INSTALLATION
 
@@ -25,16 +21,14 @@ DEPENDENCIES
 
 This module requires these other modules and libraries:
 
-  blah blah blah
+   AnyEvent
 
 COPYRIGHT AND LICENCE
 
-Put the correct copyright and licence information here.
+Released under perl license
 
-Copyright (C) 2010 by Mikhail
+Copyright (C) 2010 by Mikhail Maluyk <mikhail.maluyk@gmail.com>
 
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself, either Perl version 5.10.1 or,
 at your option, any later version of Perl 5 you may have available.
-
-
