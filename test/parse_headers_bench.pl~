@@ -1,4 +1,0 @@
-
-use common::sense;
-use Benchmark ':all';
-
