@@ -35,7 +35,10 @@ http_server undef, 8080, sub {
     is($url, '/', 'url is /');
     is($body, $post, 'post body');
 
-    $done->(200, {}, "");
+    $done->(200, {
+        'Content-Type'   => 'text/plain',
+        'Content-Length' => 0
+    }, "");
 };
 
 http_post 'http://127.0.0.1:8080/', $post, sub {

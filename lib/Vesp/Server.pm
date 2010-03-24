@@ -97,11 +97,16 @@ sub on_request ($$) {
 }
 
 sub _undef_hdl_cb {
-    my ($self, $type) = @_;
+    my ($self, $type, $done) = @_;
     return sub {
         my $hdl = shift;
         undef $hdl;
-        $self->{$type}->(@_) if $self->{$type};
+
+        if ($done) {
+            $done->(@_);
+        } else {
+            $self->{$type}->(@_) if $self->{$type};
+        }
     };
 }
 
@@ -179,19 +184,24 @@ sub _read_headers ($$) {
     });
 }
 
-sub _response_waiting_cb ($) {
-    my ($hdl) = @_;
+sub _response_waiting_cb {
+    my ($self, $hdl) = @_;
     return sub {
         my ($status, $hdr, $body, $done) = @_;
+
+        # note sure about this solution
+        $hdl->on_eof($self->_undef_hdl_cb('on_close', $done));
+        $hdl->on_error($self->_undef_hdl_cb('on_error', $done));
+        $hdl->on_timeout($self->_undef_hdl_cb('on_timeout', $done));
         
         my @s = ($status) =~ /\d/ ?
             ($status, $_status_to_str{$status}) :
             ($_status_to_num{$status}, $status);
         
-        # [motherfucker...]
+        # [motherfucker...] redo when have time
         my $hdr_str = "";
         if (blessed $hdr && $hdr->isa('HTTP::Headers')) {
-            $hdr_str = $hdr->as_string;
+            $hdr_str = $hdr->as_string("\015\012");
         } elsif (reftype $hdr eq 'HASH') {
             $hdr_str = (join "", map "\u$_: $hdr->{$_}\015\012", grep defined $hdr->{$_}, keys %$hdr);
         } elsif (reftype $hdr eq 'ARRAY') {
@@ -212,10 +222,23 @@ sub _response_waiting_cb ($) {
             "$body" =~ m{IO::AIO::fd} or
             _is_real_fh($body)
         ) {
-            # we can use sendfile if we are under linux >= 2.2
-            _sendfile($hdl->fh, $body, 0, -s $body, sub {
-                undef $hdl;
-                $done->() if $done;
+            # use sendfile in future, for
+            # now use push_read :)
+
+             # _push_data_from_fh($hdl, $body, sub {
+             #     undef $hdl;
+             #     $done->() if $done;                   
+             # });
+             # return;
+             
+            # first of all we want to be sure that headers are already there...
+            # then we can start our dirty hacks
+            $hdl->on_drain(sub {
+                # we can use sendfile if we are under linux >= 2.2
+                _sendfile($hdl, $body, 0, -s $body, sub {
+                    undef $hdl;
+                    $done->() if $done;
+                });
             });
         } else {
             # just do a plain write to filehandle
@@ -236,11 +259,33 @@ sub _response_waiting_cb ($) {
     };
 }
 
+sub _push_data_from_fh {
+    my ($hdl, $fh, $cb) = @_;
+    _write_data($hdl, $fh, 0, -s $fh, $cb);
+}
+
+sub _write_data {
+    my ($hdl, $fh, $offset, $size, $cb) = @_;
+    
+    my $buffer = "";
+    aio_read $fh, $offset, 8192, $buffer, 0, sub {
+        my ($retval) = @_;
+        $offset += $retval if $retval > 0;
+        $hdl->push_write($buffer);
+                
+        if ($offset >= $size) {
+            $cb->();
+        } else {
+            _write_data($hdl, $fh, $offset, $size, $cb);
+        }
+    }
+}
+
 sub _process_request {
     my ($self, $cb) = @_;
     return sub {
         my ($fh, $client_host, $client_port) = @_;
-        my $hdl; $hdl = Vesp::Server::Handle->new(
+        my $hdl; $hdl = AnyEvent::Handle->new(
             fh          => $fh,
             on_eof      => $self->_undef_hdl_cb('on_close'),
             on_error    => $self->_undef_hdl_cb('on_error'),
@@ -257,7 +302,7 @@ sub _process_request {
             my ($method, $url, $vm, $vi) = @_;
             _read_headers $hdl, sub {
                 my ($headers, $body) = @_;
-                $cb->($method, $url, $headers, $body, _response_waiting_cb $hdl);
+                $cb->($method, $url, $headers, $body, $self->_response_waiting_cb($hdl));
              };
          };
     };
@@ -267,14 +312,27 @@ sub _process_request {
 # creates a memleak when recurses
 
 sub _sendfile {
-    my ($fh, $body, $offset, $size, $cb) = @_;
-    aio_sendfile $fh, $body, $offset, $size - $offset, sub {
+    my ($hdl, $in_fh, $offset, $size, $cb) = @_;
+    
+    aio_sendfile $hdl->fh, $in_fh, $offset, $size - $offset, sub {
         my ($retval) = @_;
-        $offset += $retval if $retval > 0;
+        if ($retval < 0) {
+            # shit, something went wrong, it seems that
+            # shut the fuck down, and tell about the error
+            # suggestions how to handle this are welcomed,
+            # i was beaten by this once
+            
+            # does callback destroy $hdl enough?
+            $hdl->{on_error}->($hdl, -1, 'IO::AIO sendfile error, can\'t write data');
+            return;
+        }        
+        
+        $offset += $retval;
+                
         if ($offset >= $size) {
             $cb->();
         } else {
-            _sendfile($fh, $body, $offset, $size, $cb);
+            _sendfile($hdl, $in_fh, $offset, $size, $cb);
         }
     };
 }
