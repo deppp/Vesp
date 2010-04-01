@@ -1,11 +1,11 @@
 #!/usr/bin/perl -Iblib/lib -Iblib/arch -I../blib/lib -I../blib/arch
 # 
 # Before `make install' is performed this script should be runnable with
-# `make test'. After `make install' it should work as `perl 001_get.t'
+# `make test'. After `make install' it should work as `perl 003_large_get.t'
 
 # Test file created outside of h2xs framework.
-# Run this like so: `perl 001_get.t'
-#   Mikhail <depp@deppp>     2010/03/19 23:23:09
+# Run this like so: `perl 003_large_get.t'
+#   Mikhail <depp@deppp>     2010/03/27 06:22:54
 
 #########################
 
@@ -21,31 +21,37 @@ BEGIN { use_ok( Vesp ); }
 
 use common::sense;
 
-use EV;
 use AnyEvent;
 use AnyEvent::HTTP;
+
+my $cv = AnyEvent->condvar;
+
+# 10 mb
+my $big_body = "";
+foreach (1 .. 1_000_000) {
+    $big_body .= '1234567890';    
+}
 
 http_server undef, 8080, sub {
     my $done = pop;
     my ($method, $url, $hdr, $body) = @_;
 
     is($method, 'GET', 'method is get');
-    is($url, '/', 'url is /');
+    is($url, '/large_get', 'url is /large_get');
     is($body, "", 'body is empty');
-
-    my $res = "test";
-    $done->(200, { 'Content-Length' => length $res }, $res, sub {
+    
+    $done->(200, { 'Content-Length' => length $big_body }, $big_body, sub {
         pass("on_done callback called");
     });
 };
 
-http_get 'http://127.0.0.1:8080/', sub {
+http_get 'http://127.0.0.1:8080/large_get', sub {
     my ($body, $headers) = @_;
-
-    is($body, "test", 'body is text');
-    is($headers->{'content-length'}, 4, "one header only");
-
-    EV::unloop;
+    
+    is($body, $big_body, 'body is text');
+    is($headers->{'content-length'}, 10_000_000, "content length");
+    
+    $cv->send;
 };
 
-EV::loop;
+$cv->recv;

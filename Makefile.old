@@ -183,10 +183,16 @@ PERL_ARCHIVE_AFTER =
 
 
 TO_INST_PM = lib/Vesp.pm \
-	lib/Vesp/Server.pm
+	lib/Vesp/MP.pm \
+	lib/Vesp/Server.pm \
+	lib/Vesp/Simple.pm
 
 PM_TO_BLIB = lib/Vesp/Server.pm \
 	blib/lib/Vesp/Server.pm \
+	lib/Vesp/MP.pm \
+	blib/lib/Vesp/MP.pm \
+	lib/Vesp/Simple.pm \
+	blib/lib/Vesp/Simple.pm \
 	lib/Vesp.pm \
 	blib/lib/Vesp.pm
 
@@ -481,7 +487,7 @@ metafile : create_distdir
 	$(NOECHO) $(ECHO) '--- #YAML:1.0' > META_new.yml
 	$(NOECHO) $(ECHO) 'name:               Vesp' >> META_new.yml
 	$(NOECHO) $(ECHO) 'version:            0.01' >> META_new.yml
-	$(NOECHO) $(ECHO) 'abstract:           Perl extension for blah blah blah' >> META_new.yml
+	$(NOECHO) $(ECHO) 'abstract:           Small embeddable non-blocking webserver, based on AnyEvent' >> META_new.yml
 	$(NOECHO) $(ECHO) 'author:' >> META_new.yml
 	$(NOECHO) $(ECHO) '    - Mikhail <depp@nonet>' >> META_new.yml
 	$(NOECHO) $(ECHO) 'license:            unknown' >> META_new.yml
@@ -790,7 +796,7 @@ testdb_static :: testdb_dynamic
 # Creates a PPD (Perl Package Description) for a binary distribution.
 ppd :
 	$(NOECHO) $(ECHO) '<SOFTPKG NAME="$(DISTNAME)" VERSION="0.01">' > $(DISTNAME).ppd
-	$(NOECHO) $(ECHO) '    <ABSTRACT>Perl extension for blah blah blah</ABSTRACT>' >> $(DISTNAME).ppd
+	$(NOECHO) $(ECHO) '    <ABSTRACT>Small embeddable non-blocking webserver, based on AnyEvent</ABSTRACT>' >> $(DISTNAME).ppd
 	$(NOECHO) $(ECHO) '    <AUTHOR>Mikhail &lt;depp@nonet&gt;</AUTHOR>' >> $(DISTNAME).ppd
 	$(NOECHO) $(ECHO) '    <IMPLEMENTATION>' >> $(DISTNAME).ppd
 	$(NOECHO) $(ECHO) '        <ARCHITECTURE NAME="x86_64-linux-5.10" />' >> $(DISTNAME).ppd
@@ -804,6 +810,8 @@ ppd :
 pm_to_blib : $(FIRST_MAKEFILE) $(TO_INST_PM)
 	$(NOECHO) $(ABSPERLRUN) -MExtUtils::Install -e 'pm_to_blib({@ARGV}, '\''$(INST_LIB)/auto'\'', q[$(PM_FILTER)], '\''$(PERM_DIR)'\'')' -- \
 	  lib/Vesp/Server.pm blib/lib/Vesp/Server.pm \
+	  lib/Vesp/MP.pm blib/lib/Vesp/MP.pm \
+	  lib/Vesp/Simple.pm blib/lib/Vesp/Simple.pm \
 	  lib/Vesp.pm blib/lib/Vesp.pm 
 	$(NOECHO) $(TOUCH) pm_to_blib
 

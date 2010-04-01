@@ -4,7 +4,8 @@ use common::sense;
 use Carp;
 use Guard;
 use List::Util 'first';
-use Scalar::Util 'reftype', 'blessed';
+use Scalar::Util 'reftype', 'blessed', 'weaken';
+use Errno qw(EAGAIN EINTR);
 
 use AnyEvent;
 use AnyEvent::Handle;
@@ -12,14 +13,18 @@ use AnyEvent::Socket;
 
 use HTTP::Headers;
 
-use constant HAS_AIO => eval {
-    require IO::AIO;
-    require AnyEvent::AIO;
-    1;
-};
+BEGIN {
+    use constant HAS_AIO => eval {
+        require IO::AIO;
+        require AnyEvent::AIO;
+    };
+}
 
-use AnyEvent::AIO;
 use IO::AIO;
+use AnyEvent::AIO;
+
+IO::AIO::max_poll_reqs 0; # process all request in poll_cb 
+IO::AIO::max_poll_time 0.1; # but limit time by 0.1 to stay responsive
 
 use constant USE_AIO  => ! $ENV{VESP_NO_AIO};
 use constant WITH_AIO => HAS_AIO && USE_AIO;
@@ -35,10 +40,9 @@ my %_status_to_num = map {
     $_status_to_str{$_} => $_
 } keys %_status_to_str;
 
-my @_supported_headers_parsers = qw/
-    HTTP::Parser::XS
-/;
-
+my %_header_obj_map = (
+    'HTTP::Header' => 'header'
+);
 
 =head1 NAME
 
@@ -77,12 +81,12 @@ The constructor supports these arguments.
 sub new {
     my ($class, %args) = @_;
     my $self = bless \%args, $class;
-
+    
     if (my $hdras = $self->{headers_as}) {
         if ($hdras !~ m{Scalar|ArrayRef|HashRef}) {
             # means it wants it as an object of some kind
             carp "$hdras is not supported for parsing http headers, please consider using want_headers_handle option"
-                if ! grep { $_ eq $hdras } @_supported_headers_parsers;
+                if ! grep { $_ eq $hdras } keys %_header_obj_map;
 
             require $hdras;
         }
@@ -110,42 +114,73 @@ sub _undef_hdl_cb {
     };
 }
 
-sub _parse_headers ($) {
-    my ($header) = @_;
-    my $hdr;
+sub _parse_headers ($$) {
+    my ($header, $as) = @_;
 
+    if ($as eq 'ScalarRef') {
+        my $cntlen = ($header) =~ m{Content-Length:\s*(\d+)};
+        return (\$header, $cntlen); 
+    }
+    
+    $as ||= 'HashRef';
     $header =~ y/\015//d;
 
+    my $hdr;
+    my $cntlen;
+    
+    if ($as !~ m{HashRef|ArrayRef}) {
+        $hdr = $as->new;
+    }
+    
     while ($header =~ /\G
         ([^:\000-\037]+):
         [\011\040]*
         ( (?: [^\012]+ | \012 [\011\040] )* )
         \012
     /sgcxo) {
-        $hdr->{lc $1} .= ",$2"
-    }
+        my ($key, $val) = ($1, $2);
+        $key =~ s{\012([\011\040])}{$1}sgo;
 
+        $cntlen = $val
+            if $key eq 'Content-length';
+                        
+        if (blessed $hdr) {
+            my $push = $_header_obj_map{$as};
+            $as->$push($key => $val);
+        } else {
+            if ($as eq 'HashRef') {
+                $hdr->{lc $key} = $val;
+            } elsif ($as eq 'ArrayRef') {
+                push @$hdr, (lc($key) => $val);
+            } else {
+                croak "Can't understand required headers format";
+            }
+        }
+    }
+    
     return undef unless $header =~ /\G$/sgxo;
+    
+    #for (keys %$hdr) {
+    #    substr $hdr->{$_}, 0, 1, '';
+    #    # remove folding:
+    #    $hdr->{$_} =~ s/\012([\011\040])/$1/sgo;
+    #}
+    
+    #HTTP::Headers->new(%$hdr);
 
-    for (keys %$hdr) {
-        substr $hdr->{$_}, 0, 1, '';
-        # remove folding:
-        $hdr->{$_} =~ s/\012([\011\040])/$1/sgo;
-    }
-
-    HTTP::Headers->new(%$hdr);
+    return ($hdr, $cntlen);
 }
 
 sub _read_head ($$);
 sub _read_head ($$) {
     my ($hdl, $cb) = @_;
-
+    
     $hdl->unshift_read(line => sub {
         my ($hdl, $line) = @_;
         
         if ($line =~ /(\S+) \040 (\S+) \040 HTTP\/(\d+)\.(\d+)/xso) {
             my ($meth, $url, $vm, $vi) = ($1, $2, $3, $4);
-
+            
             if (! grep { $meth eq $_ } qw/GET HEAD POST PUT DELETE/) {
                 $hdl->on_error->("501", "Not Implemented");
             } else {
@@ -159,21 +194,22 @@ sub _read_head ($$) {
     });
 }
 
-sub _read_headers ($$) {
+sub _read_headers {
     my $cb = pop;
     my $hdl = shift;
     my %options = @_;
     
     $hdl->unshift_read(line => qr/(?<![^\012])\015\012/o, sub {
         my ($hdl, $data) = @_;
-        my $headers = _parse_headers $data
+        my ($headers, $cntlen) = _parse_headers $data, $options{headers_as}
             or print "error with headers" && return;
-
+        
         if ($options{'want_body_handle'}) {
+            Scalar::Util::weaken($hdl);
             $cb->($headers, $hdl);
         } else {
-            if (defined $headers->{'content-length'}) {
-                $hdl->unshift_read(chunk => $headers->{'content-length'}, sub {
+            if ($cntlen) {
+                $hdl->unshift_read(chunk => $cntlen, sub {
                     my ($hdl, $data) = @_;
                     $cb->($headers, $data);
                 });
@@ -196,7 +232,7 @@ sub _response_waiting_cb {
         
         my @s = ($status) =~ /\d/ ?
             ($status, $_status_to_str{$status}) :
-            ($_status_to_num{$status}, $status);
+            ($_status_to_num{$status}, $status) ;
         
         # [motherfucker...] redo when have time
         my $hdr_str = "";
@@ -283,6 +319,13 @@ sub _write_data {
 
 sub _process_request {
     my ($self, $cb) = @_;
+
+    my %https;
+    if ( $self->{https} ) {
+        $https{tls} = 'accept';
+        $https{tls_ctx} = $self->{https}            
+    }
+    
     return sub {
         my ($fh, $client_host, $client_port) = @_;
         my $hdl; $hdl = AnyEvent::Handle->new(
@@ -292,6 +335,7 @@ sub _process_request {
             on_timeout  => $self->_undef_hdl_cb('on_timeout'),
             client_host => $client_host,
             client_port => $client_port,
+            %https
         );
         
         if ($self->{on_connect}) {
@@ -300,35 +344,30 @@ sub _process_request {
         
         _read_head $hdl, sub {
             my ($method, $url, $vm, $vi) = @_;
-            _read_headers $hdl, sub {
-                my ($headers, $body) = @_;
-                $cb->($method, $url, $headers, $body, $self->_response_waiting_cb($hdl));
-             };
+            _read_headers $hdl,
+                want_body_handle => $self->{want_body_handle},
+                headers_as       => $self->{headers_as},
+                sub {
+                    my ($headers, $body) = @_;
+                    $cb->($method, $url, $headers, $body, $self->_response_waiting_cb($hdl));
+                };
          };
     };
 }
 
-# using this as anon sub (got from Twiggy),
-# creates a memleak when recurses
-
 sub _sendfile {
     my ($hdl, $in_fh, $offset, $size, $cb) = @_;
-    
+
     aio_sendfile $hdl->fh, $in_fh, $offset, $size - $offset, sub {
         my ($retval) = @_;
-        if ($retval < 0) {
-            # shit, something went wrong, it seems that
-            # shut the fuck down, and tell about the error
-            # suggestions how to handle this are welcomed,
-            # i was beaten by this once
-            
+        $offset += $retval if $retval > 0;
+                
+        if ($retval == -1 && ! ($! == EAGAIN || $! == EINTR)) {
             # does callback destroy $hdl enough?
-            $hdl->{on_error}->($hdl, -1, 'IO::AIO sendfile error, can\'t write data');
+            $hdl->{on_error}->($hdl, -1, "IO::AIO sendfile error: $!");
             return;
         }        
-        
-        $offset += $retval;
-                
+                        
         if ($offset >= $size) {
             $cb->();
         } else {
