@@ -1,7 +1,6 @@
 package Vesp;
 use common::sense;
 
-use Carp ();
 use Vesp::Server;
 
 require Exporter;
@@ -26,8 +25,8 @@ Vesp - Small embeddable non-blocking webserver, based on AnyEvent
 =head1 DESCRIPTION
 
 This module implements very simple and very configurable HTTP web server.
-Embedding it into your software is very easy, and since this server doesn't
-use condvars you won't get any errors if you do use it.
+Embedding it into your software is very easy. Also take a look at Vesp::Simple,
+which has more simple interface, and will handle some stuff automaticaly (like content-length, content-type headers). If you want to extend or do runtime modifications on your webserver, take a look at Vesp::Server. This module is built upon it.
 
 =head2 EXPORT
 
@@ -93,37 +92,65 @@ it doesn't block)
     };
 
 $guard is Guard object and if you undefy it, it will finish all http
-requests with Temprorary unavailable error.
+requests with Service unavailable error.
 
 Now let's look at the configuration options that you have
 
 =over 4
 
-=item https
+=item https => { key_file => 'your_key.pem', cert_file => 'your_cert.pem' }
 
-=item want_read_body_handle
+Enables https support for your webserver, you need to provide either or
+AnyEvent::TLS object or a HashRef which will be used to construct an
+AnyEvent::TLS object. For more information you need to look into AnyEvent::TLS
+documentation, or lookup "tls_ctx" parameter in AnyEvent::Handle.
 
-=item want_write_body_handle
+=item on_body
 
-=item headers_as
+=item want_body_handle
 
-=item body_as
+When enabled, after parsing the headers, the completion callback will be called
+instead of downloading the body. Instead of $body parameter containting the data
+you'll get AnyEvent::Handle object associated with current connection. This is
+rather advanced option, and it's easy to shoot yourself in the leg, so here a few
+things to remember.
 
-=item url_as
-
-=item on_connect
+=item headers_as ScalarRef|ArrayRef|HashRef|HTTP::Headers
 
 =item timeout
 
 =item timeout_cb
 
+=back
+
+=back
+
+=head2 TODO
+
+=over 4
+
+=item mp
+
+AnyEvent::MP support
+
 =item psgi
 
-=item gzip
+PSGI support would be nice at some point
 
-=back
+=item compression gzip/bzip
 
-=back
+Compression support
+
+=item url_as => Scalar|URI
+
+Represent url as either Scalar or URI object instance. 
+
+=item body_as
+
+I think it would be nice to have a body parsed/constructed in a certain way,
+for example as HTTP::Body object, but since HTTP::Body is blocking because of
+it's use of File::Temp we can't use it. So more work is required for this
+parameter to be present. Anyone willing to contribute Vesp::Body?
 
 =cut
 
@@ -139,7 +166,7 @@ sub http_server ($$@) {
     
     $server->on_request($cb);
 
-    defined wantarray && $server->{_guard};
+    defined wantarray && delete $server->{_guard};
 }
 
 =head1 SEE ALSO
