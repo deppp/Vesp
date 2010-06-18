@@ -18,14 +18,17 @@ BEGIN {
         require IO::AIO;
         IO::AIO->import;
         require AnyEvent::AIO;
+        1;
     };
 }
 
-IO::AIO::max_poll_reqs 0;   # process all request in poll_cb 
-IO::AIO::max_poll_time 0.1; # but limit time by 0.1 to stay responsive
-
 use constant USE_AIO  => ! $ENV{VESP_NO_AIO};
 use constant WITH_AIO => HAS_AIO && USE_AIO;
+
+if (WITH_AIO) {
+    IO::AIO::max_poll_reqs 0;   # process all request in poll_cb 
+    IO::AIO::max_poll_time 0.1; # but limit time by 0.1 to stay responsive
+}
 
 use constant DEBUG => $ENV{VESP_DEBUG};
 
@@ -86,11 +89,10 @@ sub new {
     if (my $hdras = $self->{headers_as}) {
         if ($hdras !~ m{Scalar|ArrayRef|HashRef}) {
             # means it wants it as an object of some kind
-            croak "$hdras is not supported for parsing http headers, please consider using want_headers_handle option"
+            croak "$hdras is not supported for parsing http headers"
                 if ! grep { $_ eq $hdras } keys %_header_obj_map;
             
-            eval "require $hdras" ||
-                croak @$;
+            eval "require $hdras" || croak @$;
         }
     }
     
@@ -201,6 +203,7 @@ sub _read_headers {
                 });
             } else {
                 $cb->($headers, "");
+
             }
         }
     });
@@ -288,30 +291,33 @@ sub _write_data {
 
 sub on_request ($$) {
     my ($self, $cb) = @_;
-
-    my %https;
-    if ( $self->{https} ) {
-        $https{tls} = 'accept';
-        $https{tls_ctx} = delete $self->{https}            
-    }
     
+    my %tls;
+    if ( $self->{tls} ) {
+        $tls{tls} = 'accept';
+        $tls{tls_ctx} = delete $self->{tls}            
+    }
+
+    my %args;
+    $args{timeout} = $self->{timeout} || 300;
+        
     $self->{_tcp_server_guard} = tcp_server $self->{host}, $self->{port}, sub {
         my %state = (
-            fh => $_[0],
+            fh          => $_[0],
             client_host => $_[1],
             client_port => $_[2]
         );
-                
-        $state{hdl} = AnyEvent::Handle->new(%state, %https);
+        
+        $state{hdl} = Vesp::Server::Handle->new(%state, %tls, %args);
         
         $state{hdl}->on_error(sub {
             %state = ();
-            $cb->();
+            $cb->(undef, undef, undef, $_[2], undef);
         });
         
         $state{hdl}->on_eof(sub {
             %state = ();
-            $cb->();
+            $cb->(undef, undef, undef, "Unexpected end-of-file", undef);
         });
         
         Scalar::Util::weaken (my $s = \%state);

@@ -26,7 +26,7 @@ use AnyEvent::HTTP;
 
 my $cv = AnyEvent->condvar;
 
-http_server undef, 8080, https => {
+http_server undef, 8080, tls => {
     key_file  => 't/test_key.pem',
     cert_file => 't/test_cert.pem'
 }, sub {

@@ -98,9 +98,9 @@ Now let's look at the configuration options that you have
 
 =over 4
 
-=item https => { key_file => 'your_key.pem', cert_file => 'your_cert.pem' }
+=item tls => { key_file => 'your_key.pem', cert_file => 'your_cert.pem' }
 
-Enables https support for your webserver, you need to provide either or
+Enables tls support for your webserver, you need to provide either 
 AnyEvent::TLS object or a HashRef which will be used to construct an
 AnyEvent::TLS object. For more information you need to look into AnyEvent::TLS
 documentation, or lookup "tls_ctx" parameter in AnyEvent::Handle.
@@ -140,10 +140,6 @@ PSGI support would be nice at some point
 =item compression gzip/bzip
 
 Compression support
-
-=item url_as => Scalar|URI
-
-Represent url as either Scalar or URI object instance. 
 
 =item body_as
 
