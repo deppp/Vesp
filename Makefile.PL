@@ -1,12 +1,29 @@
-#use 5.010001;
-use ExtUtils::MakeMaker;
-# See lib/ExtUtils/MakeMaker.pm for details of how to influence
-# the contents of the Makefile that is written.
-WriteMakefile(
-    NAME              => 'Vesp',
-    VERSION_FROM      => 'lib/Vesp.pm', # finds $VERSION
-    PREREQ_PM         => {}, # e.g., Module::Name => 1.1
-    ($] >= 5.005 ?     ## Add these new keywords supported since 5.005
-      (ABSTRACT_FROM  => 'lib/Vesp.pm', # retrieve abstract from module
-       AUTHOR         => 'Mikhail <depp@nonet>') : ()),
-);
+use strict;
+use warnings;
+use inc::Module::Install;
+
+name 'Vesp';
+
+perl_version '5.008';
+all_from     'lib/Vesp.pm';
+license      'perl';
+
+requires 'common::sense';
+requires 'AnyEvent';
+requires 'AnyEvent::AIO';
+
+requires 'IO::AIO';
+requires 'IO::AIO::Temp';
+
+requires 'Scalar::Util';
+requires 'List::Util';
+
+requires 'HTTP::Message';
+requires 'HTTP::Headers';
+
+requires 'CGI::Simple::Cookie';
+
+test_requires 'Test::More';
+
+tests_recursive();
+WriteAll();
