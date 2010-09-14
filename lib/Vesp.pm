@@ -8,7 +8,7 @@ require Exporter;
 our @ISA = 'Exporter';
 our @EXPORT = 'http_server';
 
-our $VERSION = '0.01';
+our $VERSION = '0.03';
 
 =head1 NAME
 

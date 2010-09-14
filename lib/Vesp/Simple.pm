@@ -4,7 +4,9 @@ use bytes;
 
 use Carp qw(carp croak);
 use Vesp;
+use Vesp::Body;
 use Vesp::Server;
+use Vesp::Util 'respond';
 
 use URI;
 use Scalar::Util 'reftype', 'blessed';
@@ -14,17 +16,17 @@ require Exporter;
 
 our @ISA = 'Exporter';
 our @EXPORT = ('vesp_route', 'vesp_before', 'vesp_http_server');
-our @EXPORT_OK = ('vesp_routes');
+our @EXPORT_OK = ('vesp_routes', 'vesp_drop_route');
 
 =head1 NAME
 
-Vesp::Simple -  
+Vesp::Simple - Simple http server
 
 =head1 SYNOPSIS
 
 =head1 DESCRIPTION
 
-Simple preconfigured Vesp server, manages headers and roots for you
+Simple preconfigured Vesp server, manages headers, body, roots and other stuff for you
 
 =cut
 
@@ -32,7 +34,7 @@ Simple preconfigured Vesp server, manages headers and roots for you
 
 =cut
 
-=head2 vesp_http_server
+=head2 vesp_http_server $host, $port, %args
 
 =cut
 
@@ -41,18 +43,21 @@ our $disp;
 sub vesp_http_server ($$@) {
     my ($host, $port, %args) = @_;
 
-    my $disp_class = $args{dispatch} || 'Vesp::Simple::Dispatcher::Basic';
-    $disp = $disp_class->new($args{dispatch_args});
+    my $disp_class = $args{dispatcher} || 'Vesp::Dispatcher::Basic';
+    # [TODO]
+    eval "require $disp_class";
+        
+    $disp = $disp_class->new($args{dispatcher_args});
 
     my $route_done = sub {
         my $done = shift;
         my ($status, $hdr, $body, $cb);
-
+        
         if (scalar @_ == 1) {
             $body = shift;
         } else {
             my %args = @_;
-
+            
             $status = $args{status};
             $hdr    = $args{headers};
             $body   = $args{body};
@@ -65,37 +70,54 @@ sub vesp_http_server ($$@) {
         } 
         
         $status ||= 200;
-        $done->(_http_res($status, $hdr, $body), $cb);               
+        $done->(respond($status, $hdr, $body), $cb);               
     };
-        
+    
     Vesp::http_server $host, $port,
         header_as => 'HTTP::Headers',
-        #body_as   => 'Vesp::Body', # when it's ready...
+        want_body_handle => 1,
         sub {
-            my ($method, $url, $hdr, $body, $done) = @_;
+            my ($method, $url, $hdr, $hdl, $done) = @_;
             
-            my $req = Vesp::Simple::Request->new(
-                method => $method,
-                uri    => URI->new($url),
-                hdr    => $hdr,
-                body   => $body,
+            my $body = Vesp::Body->new(
+                ctype  => $hdr->{'content-type'},
+                length => $hdr->{'content-length'},
             );
-            
-            my ($cb, $captures) = @{ $disp->find_route($url) };
-            $cb || ($done->(_http_res(404, "Route for $url not found")), return);
-            
-            $req->{captures} = $captures;
-            $req->{done} = sub { $route_done->( $done, @_ ) };
-            
-            # right now we use only 1 before route, not multiple
-            my $before = $disp->find_before_route($url);
-            if (my $before_cb = shift @$before) {
-                $req->{cnt} = sub { $cb->($req) };
-                $before_cb->($req);                
-            } else {
-                $cb->($req);
-            }
+
+            $body->init($hdl, sub {
+                my ($body) = @_;
+                
+                my $req = Vesp::Simple::Request->new(
+                    method => $method,
+                    uri    => URI->new($url),
+                    hdr    => $hdr,
+                    body   => $body,
+                );
+
+                my ($cb, $captures) = @{ $disp->find_route($url, $method, $hdr, $body) };
+                $cb || ($done->(respond 404, "Route for $url not found"), return);
+                
+                $req->{captures} = $captures;
+                $req->{done} = sub { $route_done->( $done, @_ ) };
+                
+                # right now we use only 1 before route, not multiple
+                my $before = $disp->find_before_route($url);
+                if (my $before_cb = shift @$before) {
+                    $req->{cnt} = sub { $cb->($req) };
+                    $before_cb->($req);                
+                } else {
+                    $cb->($req);
+                }
+            });
         };
+}
+
+=head2
+
+=cut
+
+sub vesp_drop_route {
+    croak "not implemented yet"
 }
 
 =head2 vesp_before
@@ -106,7 +128,28 @@ sub vesp_before ($$@) {
     $disp->add_before_route(@_);
 }
 
-=head2 vesp_route
+=head2 vesp_route $route, $callback
+
+Defines new http route. Example:
+
+    vesp_route '/some/page' => sub {
+        my ($req) = @_;
+        $req->done('OK');
+    }
+
+Array of routes is okay:
+
+    vesp_route ['/some/page', 'another/page'] => sub {
+        my ($req) = @_;
+        $req->done('OK');
+    }
+
+Regex and array of regex is okay as well:
+
+    vesp_route qr{^/some/\d+/show/?$} => sub {
+        my ($req) = @_;
+        $req->done('OK');
+    }
 
 =cut
 
@@ -114,7 +157,13 @@ sub vesp_route ($$@) {
     $disp->add_route(@_);
 }
 
-=head2 vesp_routes
+=head2 vesp_routes %args
+
+Defined several routes in one call, example:
+
+    vesp_routes
+        '/some/page'   => sub {},
+        'another/page' => sub {}
 
 =cut
 
@@ -122,134 +171,6 @@ sub vesp_routes(@) {
     my (%args) = @_;
     vesp_route $_ => $args{$_}
         for keys %args;
-}
-
-my @_dow = qw/Sun Mon Tue Wed Thu Fri Sat/;
-my @_moy = qw/Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec/;
-
-sub _time2str (;$) {
-    my $time = shift || time;
-    my ($sec, $min, $hour, $mday, $mon, $year, $wday) = gmtime($time);
-    sprintf("%s, %02d %s %04d %02d:%02d:%02d GMT",
-	    $_dow[$wday],
-	    $mday, $_moy[$mon], $year+1900,
-	    $hour, $min, $sec);
-}
-
-sub _http_res {
-    my $body = pop;
-    my ($status, $hdr) = @_;
-
-    $hdr ||= {};
-        
-    return $status, {
-        'Date'           => _time2str,
-        'Content-Lenght' => ref($body) ? bytes::length($$body) : bytes::length($body),
-        'Content-Type'   => 'text/html',
-        %$hdr
-    }, $body;
-}
-
-package Vesp::Simple::Dispatcher;
-use common::sense;
-use Carp 'confess';
-
-=head1 NAME
-
-Vesp::Simple::Dispatcher
-
-=head1 DESCRIPTION
-
-=cut
-
-my $warning = sub {
-    confess "You should define ", $_[0], " method in your dispatcher";
-};
-
-sub add_route        { $warning->('add_route') }
-sub add_before_route { $warning->('add_before_route') }
-
-# [TODO] decide if optional ?
-sub find_route {} 
-sub find_before_route {}
-
-package Vesp::Simple::Dispatcher::Basic;
-use common::sense;
-use base 'Vesp::Simple::Dispatcher';
-
-sub new {
-    my ($class, %args) = @_;
-    my $self = bless \%args, $class;
-
-    $self->{regexp_route} = [];
-    $self->{regexp_before_route} = [];
-        
-    $self;
-}
-
-sub add_route {
-    my $cb = pop;
-    my ($self, $routes, %args) = @_;
-
-    $self->_add_any_route($routes, 'route', %args, $cb);
-}
-
-sub add_before_route {
-    my $cb = pop;
-    my ($self, $routes, %args) = @_;
-
-    $self->_add_any_route($routes, 'before_route', %args, $cb);
-}
-
-sub _add_any_route {
-    my $cb   = pop;
-    my ($self, $routes, $type, %args) = @_;
-    
-    $routes = [ $routes ]
-        if ! ref $routes or ref $routes eq 'Regexp';
-    
-    foreach my $route (@$routes) {
-        if (ref $route && ref $route eq 'Regexp') {
-            push @{ $self->{'regexp_' . $type} }, $route;
-            push @{ $self->{'regexp_' . $type} }, $cb;
-        } elsif (! ref $route) {
-            $self->{$type}->{$route} = $cb;
-        } else {
-            die "Only Regexp and String routes are supported";
-        }
-    }
-}
-
-sub find_route {
-    my ($self, $url) = @_;
-    $self->_find_any_route($url, 'route');
-}
-
-sub find_before_route {
-    my ($self, $url) = @_;
-    $self->_find_any_route($url, 'before_route');
-}
-
-sub _find_any_route {
-    my ($self, $url, $type) = @_;
-
-    if (my $cb = $self->{$type}->{$url}) {
-        return [$cb]
-    } else {
-        if (@{$self->{'regexp_' . $type}}) {
-            for (my $i = 0; $i <= $#{ $self->{'regexp_' . $type} }; $i = $i + 2) {
-                my $regexp = $self->{'regexp_' . $type}->[$i];
-                if ($url =~ m{$regexp}) {
-                    return [
-                        $self->{'regexp_' . $type}->[$i + 1],           # cb
-                        [grep { defined $_ } ($1, $2, $3, $4, $5, $6)]  # captures
-                    ];
-                }
-            }
-        }
-    }
-
-    return;
 }
 
 package Vesp::Simple::Request;
@@ -265,6 +186,8 @@ Vesp::Simple::Request
 
 =head1 DESCRIPTION
 
+Vesp::Simple request object, easily access methods urls headers etc.
+
 =head1 METHODS
 
 =cut
@@ -277,16 +200,45 @@ sub new {
     my ($class, %args) = @_;
     my $self = bless \%args, $class;
 
+    my $qparams = $self->{uri}->query;
+    foreach my $kv (split /&/, $qparams) {
+        my @kv = split /=/, $kv;
+        $self->{qparams}->{$kv[0]} = $kv[1];
+    }
+    
     $self;
 }
 
 =head2 method
 
+HTTP method
+
 =head2 uri
+
+Requested url as URI object
 
 =head2 hdr
 
+Headers as HTTP::Headers object
+
 =head2 args
+
+Captures from regexp matched variables ($1, $2, $3, etc).
+Example:
+
+    vesp_route qr{/some/page/([\d]+)/?$} => sub {
+        my ($req) = @_;
+        
+    }
+
+    GET /some/page/10
+
+    $req->args->[0] holds "10"
+
+=head2 body
+
+Access to body of the request (example: data submitted via html form),
+look at Vesp::Body documentation for avialable methods.
 
 =cut
 
@@ -294,10 +246,37 @@ sub method { $_[0]->{method} }
 sub uri    { $_[0]->{uri} }
 sub hdr    { $_[0]->{hdr} }
 sub args   { $_[0]->{captures} }
+sub body   { $_[0]->{body} }
 
 =head2 cnt
 
-=head2 done
+When request is processed in "vesp_before" callback, you need to
+call "cnt" method for dispatch to continue it's job.
+
+=head2 done $body || %args
+
+When you're done processing reuqest you need to call "done" method,
+this will send $body response to client. You can tune more params
+than just body if you supply %args:
+
+=item status
+
+HTTP status code, default is 200
+
+=item headers
+
+Hashref with additional headers
+
+=item body
+
+Body of the response
+
+=item cb
+
+Callback which will be called when after all data has been written to
+client and connection was closed.
+
+=back
 
 =cut
 
@@ -313,31 +292,28 @@ sub done   {
     }
 }
 
-# [TODO] don't be naive :)
+=head2 query_params [$key]
 
-sub _parse_body ($) {
-    return {
-        map {
-            split '=', URI::Escape::uri_unescape($_)
-        } split '&', $_[0]
-    };
-}
-
-=head2 params
+URIs query parameters
 
 =cut
 
-sub params {
-    my ($self) = @_;
+sub query_params {
+    my $self = shift;
 
-    if (      ! $self->{params} &&
-        defined $self->{body}
-    ) {
-        $self->{params} = _parse_body $self->{body};
+    if (@_) {
+        my $key = shift;
+        return $self->{qparams}->{$key}
+    } else {
+        return $self->{qparams};
     }
-
-    $self->{params};
 }
+
+=head2 session
+
+might be removed in future versions
+
+=cut
 
 sub session { $_[0]->{session} }
 

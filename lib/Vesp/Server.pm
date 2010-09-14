@@ -1,6 +1,5 @@
 package Vesp::Server;
 use common::sense;
-
 use Carp;
 use Guard;
 use List::Util 'first';
@@ -72,13 +71,7 @@ $vesp->on_request(sub {
 
 =head1 METHODS
 
-=over 4
-
-=item new Vesp::Server port => $port, key => value
-
-The constructor supports these arguments.
-
-=back
+=head2 new host => $host, port => $port, %args
 
 =cut
 
@@ -342,7 +335,7 @@ sub on_request ($$) {
 
 sub _sendfile {
     my ($out_fh, $in_fh, $offset, $size, $cb) = @_;
-
+    
     aio_sendfile $out_fh, $in_fh, $offset, $size - $offset, sub {
         my ($retval) = @_;
         $offset += $retval if $retval > 0;
@@ -381,7 +374,6 @@ sub _is_real_fh ($) {
 }
 
 package Vesp::Server::Handle;
-
 use common::sense;
 use parent 'AnyEvent::Handle';
 
